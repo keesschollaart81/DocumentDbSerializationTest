@@ -14,30 +14,75 @@ namespace DocumentDbSerializationTest
 
         private static void Main(string[] args)
         {
-
             var client = new DocumentClient(new Uri("https://url.com:443/"), "**********");
+
             var database = GetDatabase(client);
             var documentCollection = GetDocumentCollection(client, database);
 
-            SetCulture("en-GB");
+            Test(
+                "Via Linq lambda",
+                 new[] { "en-GB", "nl-NL" },
+                () =>
+                {
+                    var documentQuery = client
+                        .CreateDocumentQuery<Document>(documentCollection.SelfLink)
+                        .Where(x => x.Created > LastYear);
 
-            var query1 = client
-                .CreateDocumentQuery<Document>(documentCollection.SelfLink)
-                .Where(x => x.Created > LastYear);
+                    Console.WriteLine("  {0}", documentQuery);
 
-            // query1 is now: 'SELECT * FROM root WHERE (root.created > 6.35430269777489E+17)'
+                    documentQuery.ToList();
+                });
 
-            query1.ToList(); // works
+            Test(
+                "Via SqlQuerySpec query",
+                 new[] { "en-GB", "nl-NL" },
+                () =>
+                {
+                    var sqlQuerySpec = new SqlQuerySpec("SELECT * FROM root WHERE (root.created > @lastYear)");
+                    sqlQuerySpec.Parameters = new SqlParameterCollection();
+                    sqlQuerySpec.Parameters.Add(new SqlParameter("@lastYear", LastYear));
 
-            SetCulture("nl-NL"); 
+                    var documentQuery = client.CreateDocumentQuery(documentCollection.SelfLink, sqlQuerySpec);
 
-            var query2 = client
-                .CreateDocumentQuery<Document>(documentCollection.SelfLink)
-                .Where(x => x.Created > LastYear);
+                    Console.WriteLine("  {0}", documentQuery);
 
-            // query2 is now: 'SELECT * FROM root WHERE (root.created > 6,35430269777489E+17)'
+                    documentQuery.ToList();
+                });
 
-            query2.ToList(); // throws exception {"Message: {\"errors\":[{\"severity\":\"Error\",\"location\":{\"start\":42,\"end\":43},\"code\":\"SC1001\",\"message\":\"Syntax error, incorrect syntax near ','.\"}]}}
+            Test(
+                "Via custom generated query",
+                 new[] { "en-GB", "nl-NL" },
+                () =>
+                {
+                    var query = $"SELECT * FROM root WHERE (root.created > {LastYear:E10})";
+
+                    var documentQuery = client.CreateDocumentQuery(documentCollection.SelfLink, query);
+
+                    Console.WriteLine("  {0}", documentQuery);
+
+                    documentQuery.ToList();
+                });
+
+            Console.ReadLine();
+        }
+
+        private static void Test(string description, string[] cultures, Action action)
+        {
+            foreach (var culture in cultures)
+            {
+                Console.WriteLine();
+                Console.WriteLine("{0} ({1})", description, culture);
+                SetCulture(culture);
+                try
+                {
+                    action();
+                    Console.WriteLine("  Successful!");
+                }
+                catch (AggregateException ex) when (ex.InnerException is DocumentClientException)
+                {
+                    Console.WriteLine("  Failed: {0}", ex.InnerException.Message);
+                }
+            }
         }
 
         private static DocumentCollection GetDocumentCollection(DocumentClient client, Database database)
@@ -66,6 +111,5 @@ namespace DocumentDbSerializationTest
             Thread.CurrentThread.CurrentCulture = ci;
             Thread.CurrentThread.CurrentUICulture = ci;
         }
-
     }
 }
